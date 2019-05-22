@@ -299,6 +299,7 @@ class Multinomial(distribution.Distribution):
             self.total_count, tf.reduce_sum(counts, -1),
             message="counts must sum to `self.total_count`"),
     ], counts)
+
   def draw_sample(num_samples, num_classes, logits, num_trials, dtype, seed):
     """Sample a multinomial.
     The batch shape is given by broadcasting num_trials with
