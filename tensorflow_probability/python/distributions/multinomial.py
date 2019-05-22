@@ -300,71 +300,71 @@ class Multinomial(distribution.Distribution):
             message="counts must sum to `self.total_count`"),
     ], counts)
 
-  def draw_sample(num_samples, num_classes, logits, num_trials, dtype, seed):
-    """Sample a multinomial.
-    The batch shape is given by broadcasting num_trials with
-    remove_last_dimension(logits).
-    Args:
-      num_samples: Python int or singleton integer Tensor: number of multinomial
-        samples to draw.
-      num_classes: Python int or singleton integer Tensor: number of classes.
-      logits: Floating Tensor with last dimension k, of (unnormalized) logit
-        probabilities per class.
-      num_trials: Tensor of number of categorical trials each multinomial consists
-        of.  num_trials[..., tf.newaxis] must broadcast with logits.
-      dtype: dtype at which to emit samples.
-      seed: Random seed.
-    Returns:
-      samples: Tensor of given dtype and shape [n] + batch_shape + [k].
-    """
-    with tf.name_scope("multinomial.draw_sample"):
-      # broadcast the num_trials and logits to same shape
-      num_trials = tf.ones_like(
-          logits[..., 0], dtype=num_trials.dtype) * num_trials
-      logits = tf.ones_like(
-          num_trials[..., tf.newaxis], dtype=logits.dtype) * logits
+def draw_sample(num_samples, num_classes, logits, num_trials, dtype, seed):
+  """Sample a multinomial.
+  The batch shape is given by broadcasting num_trials with
+  remove_last_dimension(logits).
+  Args:
+    num_samples: Python int or singleton integer Tensor: number of multinomial
+      samples to draw.
+    num_classes: Python int or singleton integer Tensor: number of classes.
+    logits: Floating Tensor with last dimension k, of (unnormalized) logit
+      probabilities per class.
+    num_trials: Tensor of number of categorical trials each multinomial consists
+      of.  num_trials[..., tf.newaxis] must broadcast with logits.
+    dtype: dtype at which to emit samples.
+    seed: Random seed.
+  Returns:
+    samples: Tensor of given dtype and shape [n] + batch_shape + [k].
+  """
+  with tf.name_scope("multinomial.draw_sample"):
+    # broadcast the num_trials and logits to same shape
+    num_trials = tf.ones_like(
+        logits[..., 0], dtype=num_trials.dtype) * num_trials
+    logits = tf.ones_like(
+        num_trials[..., tf.newaxis], dtype=logits.dtype) * logits
 
-      # flatten the total_count and logits
-      # flat_logits has shape [B1B2...Bm, num_classes]
-      flat_logits = tf.reshape(logits, [-1, num_classes])
-      flat_num_trials = num_samples * tf.reshape(num_trials, [-1])  # [B1B2...Bm]
+    # flatten the total_count and logits
+    # flat_logits has shape [B1B2...Bm, num_classes]
+    flat_logits = tf.reshape(logits, [-1, num_classes])
+    flat_num_trials = num_samples * tf.reshape(num_trials, [-1])  # [B1B2...Bm]
 
-      # Computes each logits and num_trials situation by map_fn.
+    # Computes each logits and num_trials situation by map_fn.
 
-      # Using just one batch tf.random.categorical call doesn't work because that
-      # requires num_trials to be the same across all members of the batch of
-      # logits.  This restriction makes sense for tf.random.categorical because
-      # for it, num_trials is part of the returned shape.  However, the
-      # multinomial sampler does not need that restriction, because it sums out
-      # exactly that dimension.
+    # Using just one batch tf.random.categorical call doesn't work because that
+    # requires num_trials to be the same across all members of the batch of
+    # logits.  This restriction makes sense for tf.random.categorical because
+    # for it, num_trials is part of the returned shape.  However, the
+    # multinomial sampler does not need that restriction, because it sums out
+    # exactly that dimension.
 
-      # One possibility would be to draw a batch categorical whose sample count is
-      # max(num_trials) and mask out the excess ones.  However, if the elements of
-      # num_trials vary widely, this can be wasteful of memory.
+    # One possibility would be to draw a batch categorical whose sample count is
+    # max(num_trials) and mask out the excess ones.  However, if the elements of
+    # num_trials vary widely, this can be wasteful of memory.
 
-      # TODO(b/123763054, b/112152209): Revisit the possibility of writing this
-      # with a batch categorical followed by batch unsorted_segment_sum, once both
-      # of those work and are memory-efficient enough.
-      def _sample_one_batch_member(args):
-        logits, num_cat_samples = args[0], args[1]  # [K], []
-        # x has shape [1, num_cat_samples = num_samples * num_trials]
-        x = tf.random.categorical(
-            logits[tf.newaxis, ...], num_cat_samples, seed=seed)
-        x = tf.reshape(x, shape=[num_samples, -1])  # [num_samples, num_trials]
-        x = tf.one_hot(
-            x, depth=num_classes)  # [num_samples, num_trials, num_classes]
-        x = tf.reduce_sum(input_tensor=x, axis=-2)  # [num_samples, num_classes]
-        return tf.cast(x, dtype=dtype)
+    # TODO(b/123763054, b/112152209): Revisit the possibility of writing this
+    # with a batch categorical followed by batch unsorted_segment_sum, once both
+    # of those work and are memory-efficient enough.
+    def _sample_one_batch_member(args):
+      logits, num_cat_samples = args[0], args[1]  # [K], []
+      # x has shape [1, num_cat_samples = num_samples * num_trials]
+      x = tf.random.categorical(
+          logits[tf.newaxis, ...], num_cat_samples, seed=seed)
+      x = tf.reshape(x, shape=[num_samples, -1])  # [num_samples, num_trials]
+      x = tf.one_hot(
+          x, depth=num_classes)  # [num_samples, num_trials, num_classes]
+      x = tf.reduce_sum(input_tensor=x, axis=-2)  # [num_samples, num_classes]
+      return tf.cast(x, dtype=dtype)
 
-      x = tf.map_fn(
-          _sample_one_batch_member, [flat_logits, flat_num_trials],
-          dtype=dtype)  # [B1B2...Bm, num_samples, num_classes]
+    x = tf.map_fn(
+        _sample_one_batch_member, [flat_logits, flat_num_trials],
+        dtype=dtype)  # [B1B2...Bm, num_samples, num_classes]
 
-      # reshape the results to proper shape
-      x = tf.transpose(a=x, perm=[1, 0, 2])
-      final_shape = tf.concat([[num_samples],
-                              tf.shape(input=num_trials), [num_classes]],
-                              axis=0)
-      x = tf.reshape(x, final_shape)
+    # reshape the results to proper shape
+    x = tf.transpose(a=x, perm=[1, 0, 2])
+    final_shape = tf.concat([[num_samples],
+                            tf.shape(input=num_trials), [num_classes]],
+                            axis=0)
+    x = tf.reshape(x, final_shape)
 
-      return x
+    return x
